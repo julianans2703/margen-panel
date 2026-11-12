@@ -1,0 +1,197 @@
+import {defaults,sum,shift,quote,status,monthly,monthOf,localDay,demo} from './model.js';
+const $ = id => document.getElementById(id);
+const read = (key,fallback) => {try{return JSON.parse(localStorage.getItem('margen.'+key)) ?? fallback}catch{return fallback}};
+const save = (key,value) => localStorage.setItem('margen.'+key,JSON.stringify(value));
+const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today=localDay();
+let month=monthOf(today), currency=read('currency','EUR'), settings={...defaults,...read('settings',{})};
+let sources=[], data=demo(today), live=false, syncing=false, selected='', timer;
+const tabs={resumen:'Resumen',facturas:'Facturas y cobros',comisiones:'Comisiones',ahorros:'Ahorros',gastos:'Gastos y presupuesto',ajustes:'Ajustes'};
+const dateLabel=(date,options={day:'numeric',month:'short'})=>date ? new Intl.DateTimeFormat('es-ES',{...options,timeZone:'UTC'}).format(new Date((date.length===7?date+'-01':date)+'T12:00:00Z')) : '—';
+const labelMonth=m=>dateLabel(m,{month:'long',year:'numeric'});
+const fmt=(n,c=currency)=>new Intl.NumberFormat('es-ES',{style:'currency',currency:c}).format(n);
+const money=n=>fmt(currency==='USD'?n*settings.rate:n);
+const percent=n=>new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(n)+' %';
+const card=(title,body)=>'<section class="card"><h2>'+title+'</h2>'+body+'</section>';
+const kpi=(name,value,note='')=>'<div class="card kpi"><small>'+name+'</small><strong class="num">'+value+'</strong><small>'+note+'</small></div>';
+const empty=message=>'<p class="muted">'+message+'</p>';
+const table=(headers,rows)=>rows.length ? '<div class="scroll"><table><thead><tr>'+headers.map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>' : empty('Sin registros en este periodo.');
+const track=(n,over=false)=>'<div class="track '+(over?'over':'')+'"><span style="width:'+Math.min(100,Math.max(0,n))+'%"></span></div>';
+const badge=i=>'<span class="pill '+(status(i)==='Retrasada'?'late':'')+'">'+status(i)+'</span>';
+const months=(end=month,n=6)=>Array.from({length:n},(_,i)=>shift(end,i-n+1));
+function chart(rows, names) {
+  const max=Math.max(1,...rows.flatMap(r=>r.values));
+  return '<div class="legend">'+names.map((n,i)=>'<span><i class="'+(i?'expense':'')+'"></i>'+n+'</span>').join('')+'</div><div class="chart">'+rows.map(({m,values})=>'<div class="group"><div class="bars" role="img" aria-label="'+esc(labelMonth(m)+' · '+values.map((v,i)=>names[i]+' '+money(v)).join(' · '))+'">'+values.map((v,i)=>'<div class="bar '+(i?'expense':'')+'" style="height:'+100*Math.max(0,v)/max+'%" title="'+esc(names[i]+' · '+money(v))+'"></div>').join('')+'</div><small>'+dateLabel(m,{month:'short'})+'</small></div>').join('')+'</div>';
+}
+function overview(s){
+  const prev=monthly(data,shift(month,-1),settings);
+  const stats=[['Facturado',s.billed,prev.billed],['Cobrado neto',s.received,prev.received],['Pendiente',s.pending,prev.pending],['Gastos',s.spent,prev.spent],['Balance',s.balance,prev.balance]];
+  const late=data.invoices.filter(i=>status(i)==='Retrasada');
+  const future=data.invoices.filter(i=>status(i)==='Pendiente' && monthOf(i.due)>monthOf(today));
+  return '<div class="grid kpis">'+stats.map(([name,n,p])=>kpi(name,money(n),(n-p>0?'+':'')+money(n-p)+' vs. mes anterior')).join('')+'</div><div class="grid two">'+card('Flujo de caja',chart(months().map(m=>{const r=monthly(data,m,settings);return {m,values:[r.received,r.spent]}}),['Cobrado neto','Gastos']))+card('Próximos cobros',months(shift(monthOf(today),3),3).map(m=>'<div class="row item"><span>'+labelMonth(m)+'</span><strong>'+money(sum(future.filter(i=>monthOf(i.due)===m),i=>quote(i,data.invoices,settings).eur))+'</strong></div>').join('')+'<p><span class="pill '+(late.length?'late':'')+'">'+late.length+' facturas retrasadas</span></p><a href="#facturas">Ver facturas →</a>')+'</div><div class="grid two">'+card('Reserva fiscal estimada','<strong>'+money(s.received*settings.tax/100)+'</strong><p class="muted">'+percent(settings.tax)+' del cobro neto de este mes.</p>')+card('Balance del mes','<strong>'+money(s.balance)+'</strong><p class="muted">Cobro neto estimado menos gastos registrados.</p>')+'</div>';
+}
+function invoices(s){
+  const visible=data.invoices.filter(i=>s.issued.includes(i)||monthOf(i.paid)===month||monthOf(i.due)===month);
+  const events=visible.flatMap(i=>[[i.issued,'Emisión',i],[i.paid,'Cobro',i],[i.due,'Vencimiento',i]]).filter(([d])=>monthOf(d)===month).sort((a,b)=>a[0].localeCompare(b[0]));
+  const current=data.invoices.find(i=>i.id===selected) ?? visible[0] ?? data.invoices[0];
+  let calc=empty('Añade facturas a Notion para simular sus cobros.');
+  if(current){
+    const q=quote(current,data.invoices,settings);
+    calc='<label class="field">Factura<select id="invoice">'+data.invoices.map(i=>'<option value="'+esc(i.id)+'" '+(current.id===i.id?'selected':'')+'>'+esc(i.client)+' · '+dateLabel(i.issued)+' · '+money(i.amount)+'</option>').join('')+'</select></label>'+[['Facturado',fmt(current.amount,'EUR')],['Bruto OneSafe',fmt(q.gross,'USD')],['Conversión',fmt(q.conversion,'USD')],['Transferencia a Mercury',fmt(q.transfer,'USD')],['Neto final en Mercury',fmt(q.net,'USD')+' / '+fmt(q.eur,'EUR')],['Total perdido',percent(q.lost)]].map(([a,b])=>'<div class="row item"><span>'+a+'</span><strong class="num">'+b+'</strong></div>').join('')+'<p class="muted">Simulación con el cambio y las comisiones de Ajustes.</p>';
+  }
+  return card('Facturas del periodo',table(['Cliente','Emisión','Cobro','Estado','Importe',''],visible.map(i=>[esc(i.client),dateLabel(i.issued),dateLabel(i.paid),badge(i),money(i.amount),'<button class="link" data-invoice="'+esc(i.id)+'">Simular</button>'])))+'<div class="grid two">'+card('Línea de tiempo',events.length?events.map(([d,type,i])=>'<div class="row item"><span><small>'+dateLabel(d)+'</small><br>'+esc(i.client)+'</span><span class="pill">'+type+'</span></div>').join(''):empty('Sin eventos en este periodo.'))+card('Simulador por factura',calc)+'</div>';
+}
+function fees(s){
+  const year=month.slice(0,4), list=data.invoices.filter(i=>i.paid?.slice(0,4)===year && monthOf(i.paid)<=month);
+  const conv=rows=>sum(rows,i=>quote(i,data.invoices,settings).conversion)/settings.rate;
+  const transfer=rows=>sum(rows,i=>quote(i,data.invoices,settings).transfer)/settings.rate;
+  return '<div class="grid kpis">'+kpi('Comisiones del mes',money(s.fees))+kpi('Conversión del mes',money(conv(s.paid)))+kpi('Transferencias del mes',money(transfer(s.paid)))+kpi('Acumulado '+year,money(conv(list)+transfer(list)))+'</div>'+card('Comisiones por mes',chart(months(month,Number(month.slice(5))).map(m=>{const {paid}=monthly(data,m,settings);return {m,values:[conv(paid),transfer(paid)]}}),['Conversión','Transferencia'])+'<p class="muted">Estimaciones sobre facturas con fecha de pago, calculadas con los parámetros actuales.</p>');
+}
+function expenses(s){
+  const b=data.budgets.filter(i=>!i.month||i.month===month);
+  const cats=[...new Set([...b,...s.movements].map(i=>i.category))].sort();
+  const comparison=card('Gasto por categoría',table(['Categoría','Gastado','Presupuesto','Disponible','Uso'],cats.map(c=>{
+    const spent=sum(s.movements.filter(i=>i.category===c),i=>i.amount), limit=sum(b.filter(i=>i.category===c),i=>i.amount);
+    return [esc(c),money(spent),limit?money(limit):'—',limit?money(limit-spent):'—',limit?track(spent/limit*100,spent>limit)+percent(spent/limit*100):'—'];
+  })));
+  if(!live)return comparison;
+  return comparison+['movements','budgets'].filter(kind=>!sources.includes(kind)).map(kind=>{
+    const spending=kind==='movements';
+    const rows=data[kind];
+    return '<div class="section">'+card(spending?'Registrar gasto':'Presupuesto mensual',
+      '<form id="'+kind+'"><div class="grid fields"><label class="field">Categoría<input name="category" required maxlength="80"></label><label class="field">Importe en EUR<input name="amount" type="number" min="0" step=".01" required></label>'+
+      (spending?'<label class="field">Fecha<input type="date" name="date" required value="'+(month===monthOf(today)?today:month+'-01')+'"></label>':'')+
+      '</div><button class="primary">'+(spending?'Añadir gasto':'Guardar para '+labelMonth(month))+'</button></form><p class="muted">Guardado en este navegador.</p>'+
+      table(['Categoría','Importe',spending?'Fecha':'Mes',''],rows.filter(row=>spending?monthOf(row.date)===month:row.month===month).map(row=>[esc(row.category),money(row.amount),spending?dateLabel(row.date):labelMonth(row.month),'<button type="button" data-remove-kind="'+kind+'" data-id="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
+  }).join('');
+
+}
+const accountDefaults=()=>[
+  {name:'Imagin',currency:'EUR',balance:5200},
+  {name:'Mercury',currency:'USD',balance:7600},
+  {name:'Interactive Brokers',currency:'EUR',balance:8450},
+  {name:'Otros',currency:'EUR',balance:600}
+];
+const profile=()=>live?'real':'demo';
+const demoHistory=()=>Object.fromEntries(months(monthOf(today)).slice(0,5).map((m,i)=>[m,15300+i*1050]));
+let accounts=read('accounts.demo',accountDefaults()), goal=read('goal.demo',25000), history=read('history.demo',demoHistory());
+function savings(){
+  const total=sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
+  const liquid=total-(accounts[2].currency==='USD'?accounts[2].balance/settings.rate:accounts[2].balance);
+  const avg=sum(months(shift(month,-1),3),m=>monthly(data,m,settings).spent)/3;
+  const values=months().map(m=>({m,values:[history[m]??0]}));
+  return '<div class="grid kpis">'+kpi('Ahorro total',money(total))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div><form id="accounts" class="card"><h2>Cuentas y saldos</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">Saldo<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+money(a.currency==='USD'?a.balance/settings.rate:a.balance)+'</p>'+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
+}
+const settingsFields=[['rate','1 EUR en USD',.0001,1000],['conversion','Conversión (%)',0,100],['conversionFixed','Conversión fija (USD)',0,100000],['transfer','Transferencia (%)',0,100],['transferFixed','Transferencia fija por lote (USD)',0,100000],['tax','Reserva fiscal (%)',0,100],['refresh','Sincronización (minutos)',1,120]];
+function options(){
+  return card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p class="muted">La clave del panel se conserva en esta pestaña. Configura el token de Notion en el servidor.</p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
+}
+let access=sessionStorage.getItem('margen.access')||'';
+function setNotice(message){$('notice').textContent=message}
+function view(){
+  const tab=Object.hasOwn(tabs,location.hash.slice(1))?location.hash.slice(1):'resumen';
+  $('nav').innerHTML=Object.entries(tabs).map(([key,name],i)=>'<a href="#'+key+'" '+(key===tab?'aria-current="page"':'')+'>'+['◈','▤','⇄','◇','▥','⚙'][i]+' &nbsp;'+name+'</a>').join('');
+  $('source').textContent=live?'● Notion conectado':'● Datos de ejemplo';
+  $('currency').textContent=currency==='EUR'?'EUR €':'USD $';
+  const result=monthly(data,month,settings);
+  const descriptions={resumen:'Ingresos, gastos y capacidad de ahorro.',facturas:'Emisión, vencimientos y ruta del dinero hasta Mercury.',comisiones:'Costes estimados de conversión y transferencia.',ahorros:'Saldos, evolución mensual y objetivos.',gastos:'Compara tus movimientos con el presupuesto del mes.',ajustes:'Configura el cambio, las comisiones y la sincronización.'};
+  $('content').innerHTML='<div class="heading hero"><div><h1>'+tabs[tab]+'</h1><p class="muted">'+descriptions[tab]+'</p></div>'+(tab==='ajustes'?'':'<label class="field">Periodo<input id="month" type="month" min="1900-01" max="9999-12" value="'+month+'"></label>')+'</div>'+({resumen:overview,facturas:invoices,comisiones:fees,ahorros:savings,gastos:expenses,ajustes:options}[tab])(result);
+}
+function loadAccounts(){
+  accounts=read('accounts.'+profile(),live?accountDefaults().map(a=>({...a,balance:0})):accountDefaults());
+  goal=read('goal.'+profile(),25000);
+  history=read('history.'+profile(),live?{}:demoHistory());
+}
+async function sync(manual=false){
+  if(syncing)return;
+  if(!access){if(manual)setNotice('Introduce la clave del panel en Ajustes para conectar con Notion.');return}
+  syncing=true;
+  $('sync').disabled=true;
+  try{
+    const response=await fetch('/.netlify/functions/notion',{headers:{Authorization:'Bearer '+access},cache:'no-store'});
+    const payload=await response.json();
+    if(!response.ok)throw Error(payload.error||'No se pudo sincronizar.');
+    const first=!live;
+    sources=payload.sources;
+    data=payload.data;
+    for(const kind of ['movements','budgets'])if(!sources.includes(kind))data[kind]=read(kind+'.real',[]);
+    live=true;
+    if(first)loadAccounts();
+    setNotice('Última sincronización · '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})+(payload.warnings.length?' · '+payload.warnings.join(' '):''));
+    if(manual||first||!['#ajustes','#ahorros','#gastos'].includes(location.hash))view();
+  }catch(error){setNotice('Sincronización fallida · '+error.message)}
+  finally{syncing=false;$('sync').disabled=false}
+}
+function schedule(){
+  clearInterval(timer);
+  timer=setInterval(()=>{if(!document.hidden)sync()},settings.refresh*60000);
+}
+function collectAccounts(form){
+  const fields=new FormData(form);
+  return accounts.map((_,i)=>({name:String(fields.get('name'+i)).trim()||'Otros',balance:Number(fields.get('balance'+i)),currency:fields.get('unit'+i)}));
+}
+document.addEventListener('change',event=>{
+  if(event.target.id==='month' && event.target.validity.valid && event.target.value){month=event.target.value;view()}
+  if(event.target.id==='invoice'){selected=event.target.value;view();$('invoice')?.focus()}
+});
+document.addEventListener('click',async event=>{
+  const btn=event.target.closest('button');
+  if(!btn)return;
+  if(btn.id==='currency'){currency=currency==='EUR'?'USD':'EUR';save('currency',currency);view()}
+  if(btn.id==='theme'){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';save('dark',dark)}
+  if(btn.id==='sync')await sync(true);
+  if(btn.dataset.removeKind && live && !sources.includes(btn.dataset.removeKind)){
+    const kind=btn.dataset.removeKind;
+    data[kind]=data[kind].filter(row=>row.id!==btn.dataset.id);
+    save(kind+'.real',data[kind]);view();
+  }
+  if(btn.id==='disconnect'){
+    if(syncing)return;
+    access='';sessionStorage.removeItem('margen.access');live=false;data=demo(today);loadAccounts();setNotice('Notion desconectado.');view();
+  }
+  if(btn.dataset.invoice){selected=btn.dataset.invoice;view();$('invoice')?.focus()}
+  if(btn.id==='add'||btn.dataset.remove!==undefined){
+    accounts=collectAccounts($('accounts'));
+    if(btn.id==='add')accounts.push({name:'Otros',balance:0,currency:'EUR'});
+    else accounts.splice(Number(btn.dataset.remove),1);
+    view();
+  }
+  if(btn.id==='rate'){
+    btn.disabled=true;
+    try{
+      const response=await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=USD',{signal:AbortSignal.timeout(8000)});
+      const quote=await response.json();
+      if(!response.ok||!Number.isFinite(quote.rates?.USD)||quote.rates.USD<=0)throw Error();
+      const input=$('settings')?.elements.rate;
+      if(input){input.value=quote.rates.USD;setNotice('Tipo de referencia del '+quote.date+'. Pulsa Guardar ajustes para aplicarlo.')}
+    }catch{setNotice('Frankfurter no está disponible. Puedes introducir el cambio manualmente.')}
+    finally{btn.disabled=false}
+  }
+});
+document.addEventListener('submit',event=>{
+  event.preventDefault();
+  const form=event.target, fields=new FormData(form);
+  if(['movements','budgets'].includes(form.id) && live && !sources.includes(form.id)){
+    const kind=form.id, category=String(fields.get('category')).trim(), amount=Number(fields.get('amount'));
+    if(!category)return;
+    const spending=kind==='movements';
+    const date=String(fields.get('date')??'');
+    const row={id:crypto.randomUUID(),category,amount,...(spending?{date}:{month})};
+    if(!spending)data[kind]=data[kind].filter(item=>item.month!==month||item.category!==category);
+    data[kind].push(row);save(kind+'.real',data[kind]);
+    if(spending)month=monthOf(date);
+    view();
+  }
+  if(form.id==='settings'){settings=Object.fromEntries(settingsFields.map(([key])=>[key,Number(fields.get(key))]));save('settings',settings);schedule();setNotice('Ajustes guardados.');view()}
+  if(form.id==='accounts'){
+    accounts=collectAccounts(form);
+    history[month]=sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
+    save('accounts.'+profile(),accounts);save('history.'+profile(),history);
+    setNotice('Saldos guardados para '+labelMonth(month)+'.');view();
+  }
+  if(form.id==='goal'){goal=Number(fields.get('goal'));save('goal.'+profile(),goal);setNotice('Objetivo guardado.');view()}
+  if(form.id==='access'){if(syncing)return;access=String(fields.get('access')).trim();sessionStorage.setItem('margen.access',access);form.reset();sync(true)}
+});
+window.addEventListener('hashchange',view);
+document.documentElement.dataset.theme=read('dark',false)?'dark':'light';
+view();schedule();sync();
