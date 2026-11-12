@@ -1,6 +1,5 @@
-import {createHash,timingSafeEqual} from 'node:crypto';
+import {authorized} from '../lib/access.mjs';
 const normalize=s=>String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
-const hash=s=>createHash('sha256').update(s).digest();
 const fields={
   invoices:{client:['Cliente','Customer','Nombre','Factura'],issued:['Fecha de emisión','Emisión','Fecha factura','Fecha'],amount:['Importe en €','Importe EUR','Importe','Total'],state:['Cobrado','Estado','Status'],year:['Año'],paid:['Fecha de pago','Pago','Fecha de cobro'],due:['Vencimiento','Fecha de vencimiento'],month:['Mes'],batch:['Lote Mercury','Lote'],mercury:['Neto Mercury USD'],mercuryDate:['Fecha abono Mercury']},
   movements:{date:['Fecha','Fecha del movimiento'],amount:['Importe','Importe en €','Cantidad','Total'],category:['Categoría','Categoria','Category'],type:['Tipo','Tipo de movimiento']},
@@ -118,7 +117,7 @@ export async function handler(event){
   const key=process.env.DASHBOARD_ACCESS_KEY;
   if(!key||!process.env.NOTION_TOKEN||!process.env.NOTION_FACTURAS)return json(503,{error:'Configura la conexión en Netlify primero.'});
   if(key.length<24)return json(503,{error:'Configura una clave de acceso de al menos 24 caracteres.'});
-  if(!timingSafeEqual(hash(event.headers.authorization||''),hash('Bearer '+key)))return json(401,{error:'Clave de acceso incorrecta.'});
+  if(!authorized(event.headers.authorization,event.headers.cookie,key))return json(401,{error:'Clave de acceso incorrecta.'});
   try{
     let mapping;
     try{mapping=JSON.parse(process.env.NOTION_MAPPING||'{}')}catch{throw Error('NOTION_MAPPING debe ser JSON válido.')}

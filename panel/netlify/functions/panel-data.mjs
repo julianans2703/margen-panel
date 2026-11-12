@@ -1,8 +1,7 @@
-import {createHash,timingSafeEqual} from 'node:crypto';
+import {authorized} from '../lib/access.mjs';
 import {getStore} from '@netlify/blobs';
 import {sharedKeys} from '../../public/shared-keys.js';
 
-const hash=value=>createHash('sha256').update(value).digest();
 const json=(value,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'private, no-store'}});
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const same=(left,right)=>JSON.stringify(left)===JSON.stringify(right);
@@ -10,7 +9,7 @@ const same=(left,right)=>JSON.stringify(left)===JSON.stringify(right);
 export default async function handler(request){
   const key=process.env.DASHBOARD_ACCESS_KEY;
   if(!key||key.length<24)return json({error:'Falta la clave del panel.'},503);
-  if(!timingSafeEqual(hash(request.headers.get('authorization')||''),hash('Bearer '+key)))return json({error:'Clave del panel incorrecta.'},401);
+  if(!authorized(request.headers.get('authorization'),request.headers.get('cookie'),key))return json({error:'Clave del panel incorrecta.'},401);
   if(!['GET','PATCH'].includes(request.method))return json({error:'Método no permitido.'},405);
   try{
     const store=getStore({name:'margen-private',consistency:'strong'});

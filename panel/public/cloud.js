@@ -22,10 +22,10 @@ export function createCloud({read,write,changed,status}){
     if(updated)changed();
   }
   async function sync(access){
-    if(running||!access)return;
+    if(running)return;
     running=true;
     const call=async patch=>{
-      const response=await fetch('/.netlify/functions/panel-data',{method:patch?'PATCH':'GET',headers:{Authorization:'Bearer '+access,...(patch?{'Content-Type':'application/json'}:{})},body:patch?JSON.stringify(patch):undefined,cache:'no-store',signal:AbortSignal.timeout(10000)});
+      const response=await fetch('/.netlify/functions/panel-data',{method:patch?'PATCH':'GET',headers:{...(access?{Authorization:'Bearer '+access}:{}),...(patch?{'Content-Type':'application/json'}:{})},body:patch?JSON.stringify(patch):undefined,cache:'no-store',signal:AbortSignal.timeout(10000)});
       const payload=await response.json();
       if(!response.ok&&response.status!==409)throw Error(payload.error);
       return payload;

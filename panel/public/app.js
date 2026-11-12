@@ -153,7 +153,7 @@ function savings(){
 }
 const settingsFields=[['rate','1 EUR en USD',.0001,1000],['conversion','Conversión (%)',0,100],['conversionFixed','Conversión fija (USD)',0,100000],['transfer','Transferencia (%)',0,100],['transferFixed','Transferencia fija por lote (USD)',0,100000],['tax','Reserva fiscal (%)',0,100],['refresh','Sincronización (minutos)',1,120]];
 function backupPanel(){
-  return '<div class="section">'+card('Copia de tus datos','<p>Exporta desde el navegador donde ves tus cifras. Importa el archivo en el otro navegador.</p><div class="actions"><button type="button" id="exportBackup">Descargar copia</button><label class="field">Importar copia<input id="importBackup" type="file" accept=".json,application/json"></label></div>')+'</div>';
+  return '<details class="section card"><summary>Copia de seguridad</summary><p>Descarga un respaldo o recupera una copia anterior. La sincronización entre navegadores es automática.</p><div class="actions"><button type="button" id="exportBackup">Descargar copia</button><label class="field">Importar copia<input id="importBackup" type="file" accept=".json,application/json"></label></div></details>';
 }
 function exportBackup(){
   const values=Object.fromEntries(backupKeys.map(key=>[key,read(key,null)]).filter(([,value])=>value!==null));
@@ -179,9 +179,11 @@ async function importBackup(input){
   finally{input.value=''}
 }
 function options(){
-  return '<div id="cloudResolution" class="actions" '+(cloudConflict?'':'hidden')+'><button type="button" id="keepLocal">Conservar cambios de este navegador</button><button type="button" id="keepCloud">Usar cambios compartidos</button></div>'+backupPanel()+card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p class="muted">La clave del panel se conserva en esta pestaña. Configura el token de Notion en el servidor.</p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
+  return '<div id="cloudResolution" class="actions" '+(cloudConflict?'':'hidden')+'><button type="button" id="keepLocal">Conservar cambios de este navegador</button><button type="button" id="keepCloud">Usar cambios compartidos</button></div>'+backupPanel()+card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p><label><input type="checkbox" name="remember"> Recordarme en este dispositivo durante 30 días</label></p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
 }
 let access=sessionStorage.getItem('margen.access')||'';
+let remembered=read('remembered',false),authBusy=false;
+const hasAccess=()=>Boolean(access||remembered);
 let loadError=false,cloudTimer,cloudConflict=false;
 const cloud=createCloud({
   read,write,
@@ -206,9 +208,9 @@ function setNotice(message){$('notice').textContent=message}
 function view(){
   const tab=(Object.hasOwn(tabs,location.hash.slice(1))||location.hash==='#mercury')?location.hash.slice(1):'resumen';
   $('nav').innerHTML=Object.entries(tabs).map(([key,name],i)=>'<a href="#'+key+'" '+(key===tab?'aria-current="page"':'')+'>'+['◈','▤','⇄','◇','▥','◉','⚙'][i]+' &nbsp;'+name+'</a>').join('');
-  $('source').textContent=live?'● Notion conectado':access?(loadError?'● Notion sin conectar':'● Cargando datos de Notion'):'● Datos de ejemplo';
+  $('source').textContent=live?'● Notion conectado':hasAccess()?(loadError?'● Notion sin conectar':'● Cargando datos de Notion'):'● Datos de ejemplo';
   $('currency').textContent=currency==='EUR'?'EUR €':'USD $';
-  if(access&&!live&&tab!=='ajustes'){
+  if(hasAccess()&&!live&&tab!=='ajustes'){
     $('content').innerHTML=card(loadError?'No se pudieron cargar tus datos':'Cargando datos de Notion',empty(loadError?'Pulsa Sincronizar para volver a intentarlo o revisa la conexión en Ajustes.':'Tus cifras aparecerán al terminar la sincronización.'));
     return;
   }
@@ -223,14 +225,15 @@ function loadAccounts(){
 }
 async function sync(manual=false){
   if(syncing)return;
-  if(!access){if(manual)setNotice('Introduce la clave del panel en Ajustes para conectar con Notion.');return}
+  if(!hasAccess()){if(manual)setNotice('Introduce la clave del panel en Ajustes para conectar con Notion.');return}
   syncing=true;
   loadError=false;
   if(!live)view();
   $('sync').disabled=true;
   try{
-    const response=await fetch('/.netlify/functions/notion',{headers:{Authorization:'Bearer '+access},cache:'no-store'});
+    const response=await fetch('/.netlify/functions/notion',{headers:access?{Authorization:'Bearer '+access}:{},cache:'no-store'});
     const payload=await response.json();
+    if(response.status===401&&remembered&&!access){remembered=false;write('remembered',false);live=false;data=demo(today);loadAccounts();}
     if(!response.ok)throw Error(payload.error||'No se pudo sincronizar.');
     const first=!live;
     sources=payload.sources;
@@ -278,8 +281,17 @@ document.addEventListener('click',async event=>{
     save(kind+'.real',data[kind]);view();
   }
   if(btn.id==='disconnect'){
-    if(syncing)return;
-    access='';sessionStorage.removeItem('margen.access');$('cloudNotice').textContent='';live=false;data=demo(today);loadAccounts();setNotice('Notion desconectado.');view();
+    if(syncing||authBusy)return;
+    authBusy=true;
+    try{
+      if(remembered){
+        const response=await fetch('/.netlify/functions/panel-session',{method:'DELETE'});
+        if(!response.ok)throw Error();
+      }
+      remembered=false;write('remembered',false);
+      access='';sessionStorage.removeItem('margen.access');$('cloudNotice').textContent='';live=false;data=demo(today);loadAccounts();setNotice('Sesión cerrada.');view();
+    }catch{setNotice('No se pudo cerrar la sesión. Vuelve a intentarlo.')}
+    finally{authBusy=false}
   }
   if(btn.dataset.invoice){selected=btn.dataset.invoice;view();$('invoice')?.focus()}
   if(btn.id==='add'||btn.dataset.remove!==undefined){
@@ -300,7 +312,7 @@ document.addEventListener('click',async event=>{
     finally{btn.disabled=false}
   }
 });
-document.addEventListener('submit',event=>{
+document.addEventListener('submit',async event=>{
   event.preventDefault();
   const form=event.target, fields=new FormData(form);
   if(['movements','budgets'].includes(form.id) && live && !sources.includes(form.id)){
@@ -351,7 +363,25 @@ document.addEventListener('submit',event=>{
     setNotice('Saldos guardados para '+labelMonth(month)+'.');view();
   }
   if(form.id==='goal'){goal=Number(fields.get('goal'));save('goal.'+profile(),goal);setNotice('Objetivo guardado.');view()}
-  if(form.id==='access'){if(syncing)return;access=String(fields.get('access')).trim();sessionStorage.setItem('margen.access',access);form.reset();sync(true)}
+  if(form.id==='access'){
+    if(syncing||authBusy)return;
+    authBusy=true;
+    try{
+      const key=String(fields.get('access')).trim();
+      const keep=fields.has('remember');
+      if(keep||remembered){
+        const response=await fetch('/.netlify/functions/panel-session',{method:keep?'POST':'DELETE',headers:keep?{Authorization:'Bearer '+key}:{}});
+        if(!response.ok)throw Error(response.status===401?'Clave del panel incorrecta.':'No se pudo actualizar la sesión.');
+      }
+      remembered=keep;write('remembered',keep);
+      access=keep?'':key;
+      if(keep)sessionStorage.removeItem('margen.access');
+      else sessionStorage.setItem('margen.access',access);
+      form.reset();
+      await sync(true);
+    }catch(error){setNotice(error.message)}
+    finally{authBusy=false}
+  }
 });
 window.addEventListener('hashchange',view);
 document.documentElement.dataset.theme=read('dark',false)?'dark':'light';
