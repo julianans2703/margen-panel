@@ -21,7 +21,11 @@ const badge=i=>'<span class="pill '+(status(i)==='Retrasada'?'late':'')+'">'+sta
 const months=(end=month,n=6)=>Array.from({length:n},(_,i)=>shift(end,i-n+1));
 function chart(rows, names) {
   const max=Math.max(1,...rows.flatMap(r=>r.values));
-  return '<div class="legend">'+names.map((n,i)=>'<span><i class="'+(i?'expense':'')+'"></i>'+n+'</span>').join('')+'</div><div class="chart">'+rows.map(({m,values})=>'<div class="group"><div class="bars" role="img" aria-label="'+esc(labelMonth(m)+' · '+values.map((v,i)=>names[i]+' '+money(v)).join(' · '))+'">'+values.map((v,i)=>'<div class="bar '+(i?'expense':'')+'" style="height:'+100*Math.max(0,v)/max+'%" title="'+esc(names[i]+' · '+money(v))+'"></div>').join('')+'</div><small>'+dateLabel(m,{month:'short'})+'</small></div>').join('')+'</div>';
+  const bar=(v,i,m)=>{
+    const label=names[i]+' · '+money(v);
+    return '<button type="button" class="bar '+(i?'expense':'')+'" style="height:'+100*Math.max(0,v)/max+'%" aria-label="'+esc(labelMonth(m)+' · '+label)+'"><span class="bar-tip" aria-hidden="true">'+esc(label)+'</span></button>';
+  };
+  return '<div class="legend">'+names.map((n,i)=>'<span><i class="'+(i?'expense':'')+'"></i>'+n+'</span>').join('')+'</div><div class="chart">'+rows.map(({m,values})=>'<div class="group"><div class="bars">'+values.map((v,i)=>bar(v,i,m)).join('')+'</div><small>'+dateLabel(m,{month:'short'})+'</small></div>').join('')+'</div>';
 }
 function overview(s){
   const prev=monthly(withCash(),shift(month,-1),settings);
@@ -115,14 +119,27 @@ const imaginDeposits=()=>sum(cashRows().filter(row=>row.type==='imagin'),row=>ro
 function mercuryBalanceForm(snapshot){
   return '<form id="mercuryTotal"><label class="field">Saldo total de la cuenta en USD<input type="number" min="0" step=".01" name="usd" required value="'+(snapshot?.usd??'')+'"></label><button class="primary">Guardar saldo total</button></form>';
 }
+const savingAdjustments=()=>read('savingAdjustments.'+profile(),[0,0]);
+const fixedUnit=i=>i===0?'EUR':'USD';
+const adjustedBalance=(a,i)=>i<2
+  ? (a.currency===fixedUnit(i)?a.balance:i===0?a.balance/settings.rate:a.balance*settings.rate)
+    +(savingAdjustments()[i]||0)/100+(i===0?imaginDeposits():0)
+  : a.balance;
+const savingEUR=(a,i)=>(i<2?fixedUnit(i):a.currency)==='USD'?adjustedBalance(a,i)/settings.rate:adjustedBalance(a,i);
+const savingTotal=()=>accounts.reduce((total,a,i)=>total+savingEUR(a,i),0);
+function savingCard(i){
+  const name=i===0?'Ahorro en Imagin':'Ahorro en Mercury', unit=fixedUnit(i);
+  const balance=adjustedBalance(accounts[i],i);
+  return card(name,'<p><strong class="num">'+fmt(balance,unit)+'</strong>'+(i===1?'<br><small>Equivalente: '+fmt(balance/settings.rate,'EUR')+'</small>':'')+'</p><form data-saving="'+i+'"><label class="field">Importe en '+unit+'<input name="amount" type="number" min=".01" step=".01" required></label><div class="actions"><button class="primary" name="direction" value="add">Añadir ahorro</button><button name="direction" value="subtract">Retirar ahorro</button></div></form>');
+}
 function savings(){
-  const total=imaginDeposits()+sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
+  const total=savingTotal();
   const liquid=total-(accounts[2].currency==='USD'?accounts[2].balance/settings.rate:accounts[2].balance);
   const avg=sum(months(shift(month,-1),3),m=>monthly(withCash(),m,settings).spent)/3;
   const snapshot=read('mercuryTotal.'+profile(),null);
   const mercuryForm=live?card('Saldo total de Mercury',mercuryBalanceForm(snapshot)):'';
   const values=months().map(m=>({m,values:[history[m]??0]}));
-  return '<div class="grid kpis">'+kpi('Ahorro total',money(total))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div>'+mercuryForm+'<form id="accounts" class="card"><h2>Ahorros por cuenta</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">'+(i===0?'Saldo base de Imagin':'Saldo')+'<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+money((a.currency==='USD'?a.balance/settings.rate:a.balance)+(i===0?imaginDeposits():0))+'</p>'+(i===0&&imaginDeposits()?'<small>Incluye '+fmt(imaginDeposits(),'EUR')+' ingresados desde Efectivo. Introduce arriba el saldo previo a esos ingresos.</small>':'')+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
+  return '<div class="grid kpis">'+kpi('Ahorro total',fmt(total,'EUR'))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div>'+mercuryForm+'<div class="grid two">'+savingCard(0)+savingCard(1)+'</div><form id="accounts" class="card"><h2>Ahorros por cuenta</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">'+(i===0?'Saldo base de Imagin':'Saldo')+'<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+fmt(adjustedBalance(a,i),i<2?fixedUnit(i):a.currency)+'</p>'+(i===0&&imaginDeposits()?'<small>Incluye '+fmt(imaginDeposits(),'EUR')+' ingresados desde Efectivo. Introduce arriba el saldo previo a esos ingresos.</small>':'')+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
 }
 const settingsFields=[['rate','1 EUR en USD',.0001,1000],['conversion','Conversión (%)',0,100],['conversionFixed','Conversión fija (USD)',0,100000],['transfer','Transferencia (%)',0,100],['transferFixed','Transferencia fija por lote (USD)',0,100000],['tax','Reserva fiscal (%)',0,100],['refresh','Sincronización (minutos)',1,120]];
 function options(){
@@ -185,7 +202,7 @@ document.addEventListener('click',async event=>{
   if(btn.dataset.cashSpend!==undefined){const form=$('cash');form.elements.type.value='expense';form.elements.category.value=btn.dataset.cashSpend;form.elements.amount.focus()}
   if(btn.dataset.cashRemove){
     const rows=cashRows().filter(row=>row.id!==btn.dataset.cashRemove);
-    if(!validCash(rows)){setNotice('Quita primero los movimientos que usan ese dinero.');return}
+    if(adjustedBalance(accounts[0],0)-(imaginDeposits()-sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100)<-.005||!validCash(rows)){setNotice('Quita primero los movimientos que usan ese dinero.');return}
     save('cash.'+profile(),rows);setNotice('Movimiento eliminado.');view();
   }
   if(btn.dataset.depositRemove&&live){save('mercuryDeposits.real',mercuryDeposits().filter(row=>row.id!==btn.dataset.depositRemove));view()}
@@ -231,6 +248,17 @@ document.addEventListener('submit',event=>{
     if(spending)month=monthOf(date);
     view();
   }
+  if(form.dataset.saving!==undefined){
+    const index=Number(form.dataset.saving), cents=Math.round(Number(fields.get('amount'))*100);
+    if(!Number.isSafeInteger(cents)||cents<=0)return;
+    const delta=event.submitter?.value==='subtract'?-cents:cents;
+    if(Math.round(adjustedBalance(accounts[index],index)*100)+delta<0){setNotice('El importe supera el ahorro disponible.');return}
+    const adjustments=savingAdjustments();
+    adjustments[index]+=delta;
+    save('savingAdjustments.'+profile(),adjustments);
+    history[monthOf(localDay())]=savingTotal();
+    save('history.'+profile(),history);setNotice('Ahorro actualizado.');view();
+  }
   if(form.id==='cash'){
     const type=String(fields.get('type')),currency='EUR',date=String(fields.get('date'));
     const category=['deposit','imagin'].includes(type)?'':String(fields.get('category')).trim();
@@ -249,8 +277,10 @@ document.addEventListener('submit',event=>{
   if(form.id==='settings'){settings=Object.fromEntries(settingsFields.map(([key])=>[key,Number(fields.get(key))]));save('settings',settings);schedule();setNotice('Ajustes guardados.');view()}
   if(form.id==='mercuryTotal'){save('mercuryTotal.'+profile(),{usd:Number(fields.get('usd')),date:localDay()});setNotice('Saldo total de Mercury guardado.');view()}
   if(form.id==='accounts'){
-    accounts=collectAccounts(form);
-    history[month]=imaginDeposits()+sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
+    const next=collectAccounts(form);
+    if(next.slice(0,2).some((a,i)=>adjustedBalance(a,i)<-.005)){setNotice('El saldo base dejaría un ahorro negativo.');return}
+    accounts=next;
+    history[month]=savingTotal();
     save('accounts.'+profile(),accounts);save('history.'+profile(),history);
     setNotice('Saldos guardados para '+labelMonth(month)+'.');view();
   }
