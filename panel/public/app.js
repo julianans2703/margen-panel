@@ -27,8 +27,8 @@ function overview(s){
   const prev=monthly(data,shift(month,-1),settings);
   const stats=[['Trabajo del mes',s.billed,prev.billed],['Cobrado estimado',s.received,prev.received],['Pendiente',s.pending,prev.pending],['Gastos',s.spent,prev.spent],['Balance',s.balance,prev.balance]];
   const confirmed=data.invoices.filter(i=>Number.isFinite(i.mercury)&&monthOf(i.mercuryDate)===month);
-  const snapshot=read('mercurySnapshot.'+profile(),null);
-  const real=live?'<div class="grid kpis">'+kpi('Abonos confirmados en Mercury',confirmed.length?fmt(sum(confirmed,i=>i.mercury),'USD'):'—',confirmed.length+' registros con importe y fecha de abono')+kpi('Saldo Mercury registrado',snapshot?fmt(snapshot.usd,'USD'):'—',snapshot?'Guardado el '+dateLabel(snapshot.date):'Introduce el saldo de Mercury en Ahorros')+'</div>':'';
+  const snapshot=read('mercuryTotal.'+profile(),null);
+  const real=live?'<div class="grid kpis">'+kpi('Abonos confirmados en Mercury',confirmed.length?fmt(sum(confirmed,i=>i.mercury),'USD'):'—',confirmed.length+' registros con importe y fecha de abono')+kpi('Saldo total de Mercury',snapshot?fmt(snapshot.usd,'USD'):'—',snapshot?'Guardado el '+dateLabel(snapshot.date):'Introduce el saldo total en Ahorros')+'</div>':'';
   const late=data.invoices.filter(i=>status(i)==='Retrasada');
   const future=data.invoices.filter(i=>status(i)==='Pendiente' && monthOf(i.due)>monthOf(today));
   return real+'<div class="grid kpis">'+stats.map(([name,n,p])=>kpi(name,money(n),(n-p>0?'+':'')+money(n-p)+' vs. mes anterior')).join('')+'</div><div class="grid two">'+card('Flujo de caja',chart(months().map(m=>{const r=monthly(data,m,settings);return {m,values:[r.received,r.spent]}}),['Cobrado neto','Gastos']))+card('Próximos cobros',months(shift(monthOf(today),3),3).map(m=>'<div class="row item"><span>'+labelMonth(m)+'</span><strong>'+money(sum(future.filter(i=>monthOf(i.due)===m),i=>quote(i,data.invoices,settings).eur))+'</strong></div>').join('')+'<p><span class="pill '+(late.length?'late':'')+'">'+late.length+' facturas retrasadas</span></p><a href="#facturas">Ver facturas →</a>')+'</div><div class="grid two">'+card('Reserva fiscal estimada','<strong>'+money(s.received*settings.tax/100)+'</strong><p class="muted">'+percent(settings.tax)+' del cobro neto de este mes.</p>')+card('Balance del mes','<strong>'+money(s.balance)+'</strong><p class="muted">Cobro neto estimado menos gastos registrados.</p>')+'</div>';
@@ -71,7 +71,7 @@ function expenses(s){
 }
 const accountDefaults=()=>[
   {name:'Imagin',currency:'EUR',balance:5200},
-  {name:'Mercury',currency:'USD',balance:7600},
+  {name:'Ahorro en Mercury',currency:'USD',balance:7600},
   {name:'Interactive Brokers',currency:'EUR',balance:8450},
   {name:'Otros',currency:'EUR',balance:600}
 ];
@@ -82,8 +82,10 @@ function savings(){
   const total=sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
   const liquid=total-(accounts[2].currency==='USD'?accounts[2].balance/settings.rate:accounts[2].balance);
   const avg=sum(months(shift(month,-1),3),m=>monthly(data,m,settings).spent)/3;
+  const snapshot=read('mercuryTotal.'+profile(),null);
+  const mercuryForm=live?card('Saldo total de Mercury','<form id="mercuryTotal"><label class="field">Saldo total de la cuenta en USD<input type="number" min="0" step=".01" name="usd" required value="'+(snapshot?.usd??'')+'"></label><p class="muted">Copia el saldo de Mercury. Registra solo la parte apartada para ahorro en la tarjeta de abajo.</p><button class="primary">Guardar saldo total</button></form>'):'';
   const values=months().map(m=>({m,values:[history[m]??0]}));
-  return '<div class="grid kpis">'+kpi('Ahorro total',money(total))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div><form id="accounts" class="card"><h2>Cuentas y saldos</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">Saldo<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+money(a.currency==='USD'?a.balance/settings.rate:a.balance)+'</p>'+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
+  return '<div class="grid kpis">'+kpi('Ahorro total',money(total))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div>'+mercuryForm+'<form id="accounts" class="card"><h2>Ahorros por cuenta</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">Saldo<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+money(a.currency==='USD'?a.balance/settings.rate:a.balance)+'</p>'+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
 }
 const settingsFields=[['rate','1 EUR en USD',.0001,1000],['conversion','Conversión (%)',0,100],['conversionFixed','Conversión fija (USD)',0,100000],['transfer','Transferencia (%)',0,100],['transferFixed','Transferencia fija por lote (USD)',0,100000],['tax','Reserva fiscal (%)',0,100],['refresh','Sincronización (minutos)',1,120]];
 function options(){
@@ -186,11 +188,9 @@ document.addEventListener('submit',event=>{
     view();
   }
   if(form.id==='settings'){settings=Object.fromEntries(settingsFields.map(([key])=>[key,Number(fields.get(key))]));save('settings',settings);schedule();setNotice('Ajustes guardados.');view()}
+  if(form.id==='mercuryTotal'){save('mercuryTotal.'+profile(),{usd:Number(fields.get('usd')),date:localDay()});setNotice('Saldo total de Mercury guardado.');view()}
   if(form.id==='accounts'){
     accounts=collectAccounts(form);
-    const mercury=accounts[1];
-    if(mercury.currency==='USD')save('mercurySnapshot.'+profile(),{usd:mercury.balance,date:localDay()});
-    else save('mercurySnapshot.'+profile(),null);
     history[month]=sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
     save('accounts.'+profile(),accounts);save('history.'+profile(),history);
     setNotice('Saldos guardados para '+labelMonth(month)+'.');view();
