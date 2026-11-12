@@ -1,7 +1,17 @@
+import {createCloud} from './cloud.js';
+import {sharedKeys as backupKeys} from './shared-keys.js';
 import {defaults,sum,shift,quote,status,monthly,monthOf,localDay,demo} from './model.js';
 const $ = id => document.getElementById(id);
 const read = (key,fallback) => {try{return JSON.parse(localStorage.getItem('margen.'+key)) ?? fallback}catch{return fallback}};
-const save = (key,value) => localStorage.setItem('margen.'+key,JSON.stringify(value));
+const write = (key,value) => localStorage.setItem('margen.'+key,JSON.stringify(value));
+function save(key,value){
+  write(key,value);
+  if(live&&backupKeys.includes(key)){
+    cloud.stage(key,value);
+    clearTimeout(cloudTimer);
+    cloudTimer=setTimeout(syncCloud,250);
+  }
+}
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today=localDay();
 let month=monthOf(today), currency=read('currency','EUR'), settings={...defaults,...read('settings',{})};
@@ -142,11 +152,56 @@ function savings(){
   return '<div class="grid kpis">'+kpi('Ahorro total',fmt(total,'EUR'))+kpi('Fondo de emergencia',avg?new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(liquid/avg)+' meses':'—','Saldo sin inversiones / gasto medio de los 3 meses previos')+'</div>'+mercuryForm+'<div class="grid two">'+savingCard(0)+savingCard(1)+'</div><form id="accounts" class="card"><h2>Ahorros por cuenta</h2><div class="grid fields">'+accounts.map((a,i)=>'<div class="card"><label class="field">Cuenta<input name="name'+i+'" required maxlength="80" value="'+esc(a.name)+'"></label><label class="field">'+(i===0?'Saldo base de Imagin':'Saldo')+'<input name="balance'+i+'" type="number" step=".01" min="0" required value="'+a.balance+'"></label><label class="field">Moneda de la cuenta<select name="unit'+i+'"><option '+(a.currency==='EUR'?'selected':'')+'>EUR</option><option '+(a.currency==='USD'?'selected':'')+'>USD</option></select></label><p>'+fmt(adjustedBalance(a,i),i<2?fixedUnit(i):a.currency)+'</p>'+(i===0&&imaginDeposits()?'<small>Incluye '+fmt(imaginDeposits(),'EUR')+' ingresados desde Efectivo. Introduce arriba el saldo previo a esos ingresos.</small>':'')+(i>=3?'<button type="button" data-remove="'+i+'">Quitar</button>':'')+'</div>').join('')+'</div><div class="actions"><button type="button" id="add">+ Añadir cuenta</button><button class="primary">Guardar saldos</button></div></form><div class="grid two">'+card('Evolución del ahorro',Object.keys(history).some(m=>months().includes(m))?chart(values,['Saldo registrado'])+'<p class="muted">Los meses sin registro se muestran sin barra.</p>':empty('Guarda un saldo mensual para iniciar el historial.') )+card('Objetivo de ahorro','<form id="goal"><label class="field">Meta en euros<input type="number" min="1" step=".01" name="goal" value="'+goal+'" required></label><p>'+money(total)+' de '+money(goal)+'</p>'+track(total/goal*100)+'<p>'+percent(total/goal*100)+'</p><button>Guardar objetivo</button></form>')+'</div>';
 }
 const settingsFields=[['rate','1 EUR en USD',.0001,1000],['conversion','Conversión (%)',0,100],['conversionFixed','Conversión fija (USD)',0,100000],['transfer','Transferencia (%)',0,100],['transferFixed','Transferencia fija por lote (USD)',0,100000],['tax','Reserva fiscal (%)',0,100],['refresh','Sincronización (minutos)',1,120]];
+function backupPanel(){
+  return '<div class="section">'+card('Copia de tus datos','<p>Exporta desde el navegador donde ves tus cifras. Importa el archivo en el otro navegador.</p><div class="actions"><button type="button" id="exportBackup">Descargar copia</button><label class="field">Importar copia<input id="importBackup" type="file" accept=".json,application/json"></label></div>')+'</div>';
+}
+function exportBackup(){
+  const values=Object.fromEntries(backupKeys.map(key=>[key,read(key,null)]).filter(([,value])=>value!==null));
+  const url=URL.createObjectURL(new Blob([JSON.stringify({version:1,values},null,2)],{type:'application/json'}));
+  const link=document.createElement('a');link.href=url;link.download='margen-copia-'+localDay()+'.json';link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function importBackup(input){
+  try{
+    const file=input.files[0];
+    if(!file)return;
+    const {version,values}=JSON.parse(await file.text());
+    if(version!==1||!values||Array.isArray(values)||typeof values!=='object'||!Object.keys(values).length||Object.keys(values).some(key=>!backupKeys.includes(key)))throw Error();
+    for(const [key,value] of Object.entries(values)){
+      const current=read(key,null);
+      const list=['accounts.real','movements.real','budgets.real','cash.real','mercuryDeposits.real','savingAdjustments.real'].includes(key);
+      if(list&&!Array.isArray(value)||value===null||current!==null&&typeof value!==typeof current)throw Error();
+    }
+    if(Object.keys(values).some(key=>localStorage.getItem('margen.'+key)!==null)&&!window.confirm('La copia sustituirá los datos correspondientes de este navegador. ¿Continuar?'))return;
+    for(const [key,value] of Object.entries(values))save(key,value);
+    location.reload();
+  }catch{setNotice('No se pudo importar. Selecciona un archivo descargado desde Margen.')}
+  finally{input.value=''}
+}
 function options(){
-  return card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p class="muted">La clave del panel se conserva en esta pestaña. Configura el token de Notion en el servidor.</p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
+  return '<div id="cloudResolution" class="actions" '+(cloudConflict?'':'hidden')+'><button type="button" id="keepLocal">Conservar cambios de este navegador</button><button type="button" id="keepCloud">Usar cambios compartidos</button></div>'+backupPanel()+card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p class="muted">La clave del panel se conserva en esta pestaña. Configura el token de Notion en el servidor.</p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
 }
 let access=sessionStorage.getItem('margen.access')||'';
-let loadError=false;
+let loadError=false,cloudTimer,cloudConflict=false;
+const cloud=createCloud({
+  read,write,
+  changed(){
+    if(!live)return;
+    loadAccounts();
+    settings={...defaults,...read('settings',{})};
+    currency=read('currency','EUR');
+    document.documentElement.dataset.theme=read('dark',false)?'dark':'light';
+    for(const kind of ['movements','budgets'])if(!sources.includes(kind))data[kind]=read(kind+'.real',[]);
+    if(!document.activeElement?.closest('form'))view();
+  },
+  status(message,conflict){
+    cloudConflict=conflict;
+    $('cloudNotice').textContent=message;
+    const resolution=$('cloudResolution');
+    if(resolution)resolution.hidden=!conflict;
+  }
+});
+function syncCloud(){if(live&&!document.hidden)cloud.sync(access)}
 function setNotice(message){$('notice').textContent=message}
 function view(){
   const tab=(Object.hasOwn(tabs,location.hash.slice(1))||location.hash==='#mercury')?location.hash.slice(1):'resumen';
@@ -183,6 +238,7 @@ async function sync(manual=false){
     for(const kind of ['movements','budgets'])if(!sources.includes(kind))data[kind]=read(kind+'.real',[]);
     live=true;
     if(first)loadAccounts();
+    syncCloud();
     setNotice('Última sincronización · '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})+(payload.warnings.length?' · '+payload.warnings.join(' '):''));
     if(manual||first||!['#ajustes','#ahorros','#gastos','#mercury','#efectivo'].includes(location.hash)&&!document.querySelector('details[open] #mercuryTotal'))view();
   }catch(error){loadError=true;setNotice('Sincronización fallida · '+error.message);if(!live)view()}
@@ -197,12 +253,15 @@ function collectAccounts(form){
   return accounts.map((_,i)=>({name:String(fields.get('name'+i)).trim()||'Otros',balance:Number(fields.get('balance'+i)),currency:fields.get('unit'+i)}));
 }
 document.addEventListener('change',event=>{
+  if(event.target.id==='importBackup')importBackup(event.target);
   if(event.target.id==='month' && event.target.validity.valid && event.target.value){month=event.target.value;view()}
   if(event.target.id==='invoice'){selected=event.target.value;view();$('invoice')?.focus()}
 });
 document.addEventListener('click',async event=>{
   const btn=event.target.closest('button');
   if(!btn)return;
+  if(btn.id==='exportBackup')exportBackup();
+  if(btn.id==='keepLocal'||btn.id==='keepCloud'){cloud.resolve(btn.id==='keepLocal');syncCloud()}
   if(btn.id==='currency'){currency=currency==='EUR'?'USD':'EUR';save('currency',currency);view()}
   if(btn.id==='theme'){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';save('dark',dark)}
   if(btn.id==='sync')await sync(true);
@@ -220,7 +279,7 @@ document.addEventListener('click',async event=>{
   }
   if(btn.id==='disconnect'){
     if(syncing)return;
-    access='';sessionStorage.removeItem('margen.access');live=false;data=demo(today);loadAccounts();setNotice('Notion desconectado.');view();
+    access='';sessionStorage.removeItem('margen.access');$('cloudNotice').textContent='';live=false;data=demo(today);loadAccounts();setNotice('Notion desconectado.');view();
   }
   if(btn.dataset.invoice){selected=btn.dataset.invoice;view();$('invoice')?.focus()}
   if(btn.id==='add'||btn.dataset.remove!==undefined){
@@ -297,3 +356,6 @@ document.addEventListener('submit',event=>{
 window.addEventListener('hashchange',view);
 document.documentElement.dataset.theme=read('dark',false)?'dark':'light';
 view();schedule();sync();
+setInterval(syncCloud,15000);
+window.addEventListener('online',syncCloud);
+document.addEventListener('visibilitychange',syncCloud);

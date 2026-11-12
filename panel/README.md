@@ -59,3 +59,9 @@ Ejemplo de `NOTION_MAPPING` en una sola línea:
 - En **Ahorros**, registra el saldo de la cuenta en **Saldo total de Mercury**. **Resumen** muestra esa cifra en USD y su fecha de registro. En **Ahorros por cuenta**, registra aparte la parte reservada como ahorro en Mercury. El total de ahorro usa esa tarjeta junto con Imagin, inversiones y otros ahorros.
 - En **Resumen → Registrar o ver abonos**, introduce una sola vez el importe USD y la fecha de cada transferencia que figure en Mercury. Estos registros se guardan en este navegador y se suman por fecha de abono. Las facturas de Notion siguen agrupadas por su mes de trabajo.
 - En **Gastos y presupuesto**, al registrar un gasto puedes elegir USD o EUR. Se conserva el importe original. La comparación con el presupuesto en EUR usa el tipo de cambio de Ajustes.
+
+## Sincronización entre navegadores
+
+Esta versión incluye almacenamiento privado del proyecto mediante Netlify Blobs. Sube también el `package.json` de la carpeta del panel. Netlify instalará la dependencia al desplegar desde GitHub. El almacenamiento reutiliza `DASHBOARD_ACCESS_KEY` para autenticar cada petición.
+
+Tras publicar, abre primero el panel con la clave en el navegador que conserva tus datos. Espera a **Datos compartidos sincronizados** antes de abrirlo en otro navegador. Ahorros, gastos, presupuestos, efectivo, abonos manuales, saldo de Mercury y ajustes se comparten. El panel comprueba los cambios cada 15 segundos mientras está abierto y visible. Si dos navegadores cambian a la vez la misma sección, Ajustes permite elegir qué versión conservar. Todos los navegadores con la clave acceden al mismo panel.
