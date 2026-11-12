@@ -146,12 +146,17 @@ function options(){
   return card('Cambio y comisiones','<form id="settings"><div class="grid fields">'+settingsFields.map(([key,label,min,max])=>'<label class="field">'+label+'<input name="'+key+'" type="number" min="'+min+'" max="'+max+'" step="'+(key==='refresh'?'1':key==='rate'?'any':'.01')+'" required value="'+settings[key]+'"></label>').join('')+'</div><div class="actions"><button class="primary">Guardar ajustes</button><button type="button" id="rate">Consultar Frankfurter</button></div><p class="muted">Para agrupar transferencias, asigna el mismo lote en Notion. La cuota se reparte según el saldo tras la conversión. Sin lote, se calcula una transferencia por factura.</p></form>')+'<div class="section">'+card('Conexión con Notion','<form id="access"><label class="field">Clave de acceso al panel<input name="access" type="password" autocomplete="current-password" required></label><p class="muted">La clave del panel se conserva en esta pestaña. Configura el token de Notion en el servidor.</p><div class="actions"><button>Conectar y sincronizar</button><button type="button" id="disconnect">Desconectar</button></div></form>')+'</div>';
 }
 let access=sessionStorage.getItem('margen.access')||'';
+let loadError=false;
 function setNotice(message){$('notice').textContent=message}
 function view(){
   const tab=(Object.hasOwn(tabs,location.hash.slice(1))||location.hash==='#mercury')?location.hash.slice(1):'resumen';
   $('nav').innerHTML=Object.entries(tabs).map(([key,name],i)=>'<a href="#'+key+'" '+(key===tab?'aria-current="page"':'')+'>'+['◈','▤','⇄','◇','▥','◉','⚙'][i]+' &nbsp;'+name+'</a>').join('');
-  $('source').textContent=live?'● Notion conectado':'● Datos de ejemplo';
+  $('source').textContent=live?'● Notion conectado':access?(loadError?'● Notion sin conectar':'● Cargando datos de Notion'):'● Datos de ejemplo';
   $('currency').textContent=currency==='EUR'?'EUR €':'USD $';
+  if(access&&!live&&tab!=='ajustes'){
+    $('content').innerHTML=card(loadError?'No se pudieron cargar tus datos':'Cargando datos de Notion',empty(loadError?'Pulsa Sincronizar para volver a intentarlo o revisa la conexión en Ajustes.':'Tus cifras aparecerán al terminar la sincronización.'));
+    return;
+  }
   const result=monthly(withCash(),month,settings);
   const descriptions={resumen:'Ingresos, gastos y capacidad de ahorro.',facturas:'Emisión, vencimientos y ruta del dinero hasta Mercury.',comisiones:'Costes estimados de conversión y transferencia.',ahorros:'Saldos, evolución mensual y objetivos.',gastos:'Compara tus movimientos con el presupuesto del mes.',efectivo:'Saldo, dinero reservado y gastos en efectivo.',ajustes:'Configura el cambio, las comisiones y la sincronización.',mercury:'Transferencias abonadas en la cuenta.'};
   $('content').innerHTML='<div class="heading hero"><div><h1>'+(tabs[tab]||'Abonos en Mercury')+'</h1><p class="muted">'+descriptions[tab]+'</p></div>'+(tab==='ajustes'?'':'<label class="field">Periodo<input id="month" type="month" min="1900-01" max="9999-12" value="'+month+'"></label>')+'</div>'+({resumen:overview,facturas:invoices,comisiones:fees,ahorros:savings,gastos:expenses,efectivo:cashView,ajustes:options,mercury:deposits}[tab])(result);
@@ -165,6 +170,8 @@ async function sync(manual=false){
   if(syncing)return;
   if(!access){if(manual)setNotice('Introduce la clave del panel en Ajustes para conectar con Notion.');return}
   syncing=true;
+  loadError=false;
+  if(!live)view();
   $('sync').disabled=true;
   try{
     const response=await fetch('/.netlify/functions/notion',{headers:{Authorization:'Bearer '+access},cache:'no-store'});
@@ -178,7 +185,7 @@ async function sync(manual=false){
     if(first)loadAccounts();
     setNotice('Última sincronización · '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})+(payload.warnings.length?' · '+payload.warnings.join(' '):''));
     if(manual||first||!['#ajustes','#ahorros','#gastos','#mercury','#efectivo'].includes(location.hash)&&!document.querySelector('details[open] #mercuryTotal'))view();
-  }catch(error){setNotice('Sincronización fallida · '+error.message)}
+  }catch(error){loadError=true;setNotice('Sincronización fallida · '+error.message);if(!live)view()}
   finally{syncing=false;$('sync').disabled=false}
 }
 function schedule(){
