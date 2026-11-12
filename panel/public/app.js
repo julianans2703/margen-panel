@@ -25,10 +25,13 @@ function chart(rows, names) {
 }
 function overview(s){
   const prev=monthly(data,shift(month,-1),settings);
-  const stats=[['Facturado',s.billed,prev.billed],['Cobrado neto',s.received,prev.received],['Pendiente',s.pending,prev.pending],['Gastos',s.spent,prev.spent],['Balance',s.balance,prev.balance]];
+  const stats=[['Trabajo del mes',s.billed,prev.billed],['Cobrado estimado',s.received,prev.received],['Pendiente',s.pending,prev.pending],['Gastos',s.spent,prev.spent],['Balance',s.balance,prev.balance]];
+  const confirmed=data.invoices.filter(i=>Number.isFinite(i.mercury)&&monthOf(i.mercuryDate)===month);
+  const snapshot=read('mercurySnapshot.'+profile(),null);
+  const real=live?'<div class="grid kpis">'+kpi('Abonos confirmados en Mercury',confirmed.length?fmt(sum(confirmed,i=>i.mercury),'USD'):'—',confirmed.length+' registros con importe y fecha de abono')+kpi('Saldo Mercury registrado',snapshot?fmt(snapshot.usd,'USD'):'—',snapshot?'Guardado el '+dateLabel(snapshot.date):'Introduce el saldo de Mercury en Ahorros')+'</div>':'';
   const late=data.invoices.filter(i=>status(i)==='Retrasada');
   const future=data.invoices.filter(i=>status(i)==='Pendiente' && monthOf(i.due)>monthOf(today));
-  return '<div class="grid kpis">'+stats.map(([name,n,p])=>kpi(name,money(n),(n-p>0?'+':'')+money(n-p)+' vs. mes anterior')).join('')+'</div><div class="grid two">'+card('Flujo de caja',chart(months().map(m=>{const r=monthly(data,m,settings);return {m,values:[r.received,r.spent]}}),['Cobrado neto','Gastos']))+card('Próximos cobros',months(shift(monthOf(today),3),3).map(m=>'<div class="row item"><span>'+labelMonth(m)+'</span><strong>'+money(sum(future.filter(i=>monthOf(i.due)===m),i=>quote(i,data.invoices,settings).eur))+'</strong></div>').join('')+'<p><span class="pill '+(late.length?'late':'')+'">'+late.length+' facturas retrasadas</span></p><a href="#facturas">Ver facturas →</a>')+'</div><div class="grid two">'+card('Reserva fiscal estimada','<strong>'+money(s.received*settings.tax/100)+'</strong><p class="muted">'+percent(settings.tax)+' del cobro neto de este mes.</p>')+card('Balance del mes','<strong>'+money(s.balance)+'</strong><p class="muted">Cobro neto estimado menos gastos registrados.</p>')+'</div>';
+  return real+'<div class="grid kpis">'+stats.map(([name,n,p])=>kpi(name,money(n),(n-p>0?'+':'')+money(n-p)+' vs. mes anterior')).join('')+'</div><div class="grid two">'+card('Flujo de caja',chart(months().map(m=>{const r=monthly(data,m,settings);return {m,values:[r.received,r.spent]}}),['Cobrado neto','Gastos']))+card('Próximos cobros',months(shift(monthOf(today),3),3).map(m=>'<div class="row item"><span>'+labelMonth(m)+'</span><strong>'+money(sum(future.filter(i=>monthOf(i.due)===m),i=>quote(i,data.invoices,settings).eur))+'</strong></div>').join('')+'<p><span class="pill '+(late.length?'late':'')+'">'+late.length+' facturas retrasadas</span></p><a href="#facturas">Ver facturas →</a>')+'</div><div class="grid two">'+card('Reserva fiscal estimada','<strong>'+money(s.received*settings.tax/100)+'</strong><p class="muted">'+percent(settings.tax)+' del cobro neto de este mes.</p>')+card('Balance del mes','<strong>'+money(s.balance)+'</strong><p class="muted">Cobro neto estimado menos gastos registrados.</p>')+'</div>';
 }
 function invoices(s){
   const visible=data.invoices.filter(i=>s.issued.includes(i)||monthOf(i.paid)===month||monthOf(i.due)===month);
@@ -51,7 +54,7 @@ function expenses(s){
   const b=data.budgets.filter(i=>!i.month||i.month===month);
   const cats=[...new Set([...b,...s.movements].map(i=>i.category))].sort();
   const comparison=card('Gasto por categoría',table(['Categoría','Gastado','Presupuesto','Disponible','Uso'],cats.map(c=>{
-    const spent=sum(s.movements.filter(i=>i.category===c),i=>i.amount), limit=sum(b.filter(i=>i.category===c),i=>i.amount);
+    const spent=sum(s.movements.filter(i=>i.category===c),i=>i.currency==='USD'?i.amount/settings.rate:i.amount), limit=sum(b.filter(i=>i.category===c),i=>i.amount);
     return [esc(c),money(spent),limit?money(limit):'—',limit?money(limit-spent):'—',limit?track(spent/limit*100,spent>limit)+percent(spent/limit*100):'—'];
   })));
   if(!live)return comparison;
@@ -59,10 +62,10 @@ function expenses(s){
     const spending=kind==='movements';
     const rows=data[kind];
     return '<div class="section">'+card(spending?'Registrar gasto':'Presupuesto mensual',
-      '<form id="'+kind+'"><div class="grid fields"><label class="field">Categoría<input name="category" required maxlength="80"></label><label class="field">Importe en EUR<input name="amount" type="number" min="0" step=".01" required></label>'+
-      (spending?'<label class="field">Fecha<input type="date" name="date" required value="'+(month===monthOf(today)?today:month+'-01')+'"></label>':'')+
+      '<form id="'+kind+'"><div class="grid fields"><label class="field">Categoría<input name="category" required maxlength="80"></label><label class="field">'+(spending?'Importe':'Importe en EUR')+'<input name="amount" type="number" min="0" step=".01" required></label>'+
+      (spending?'<label class="field">Moneda<select name="expenseCurrency"><option>USD</option><option>EUR</option></select></label><label class="field">Fecha<input type="date" name="date" required value="'+(month===monthOf(today)?today:month+'-01')+'"></label>':'')+
       '</div><button class="primary">'+(spending?'Añadir gasto':'Guardar para '+labelMonth(month))+'</button></form><p class="muted">Guardado en este navegador.</p>'+
-      table(['Categoría','Importe',spending?'Fecha':'Mes',''],rows.filter(row=>spending?monthOf(row.date)===month:row.month===month).map(row=>[esc(row.category),money(row.amount),spending?dateLabel(row.date):labelMonth(row.month),'<button type="button" data-remove-kind="'+kind+'" data-id="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
+      table(['Categoría','Importe',spending?'Fecha':'Mes',''],rows.filter(row=>spending?monthOf(row.date)===month:row.month===month).map(row=>[esc(row.category),spending?fmt(row.amount,row.currency||'EUR'):money(row.amount),spending?dateLabel(row.date):labelMonth(row.month),'<button type="button" data-remove-kind="'+kind+'" data-id="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
   }).join('');
 
 }
@@ -176,7 +179,7 @@ document.addEventListener('submit',event=>{
     if(!category)return;
     const spending=kind==='movements';
     const date=String(fields.get('date')??'');
-    const row={id:crypto.randomUUID(),category,amount,...(spending?{date}:{month})};
+    const row={id:crypto.randomUUID(),category,amount,...(spending?{date,currency:fields.get('expenseCurrency')}:{month})};
     if(!spending)data[kind]=data[kind].filter(item=>item.month!==month||item.category!==category);
     data[kind].push(row);save(kind+'.real',data[kind]);
     if(spending)month=monthOf(date);
@@ -185,6 +188,9 @@ document.addEventListener('submit',event=>{
   if(form.id==='settings'){settings=Object.fromEntries(settingsFields.map(([key])=>[key,Number(fields.get(key))]));save('settings',settings);schedule();setNotice('Ajustes guardados.');view()}
   if(form.id==='accounts'){
     accounts=collectAccounts(form);
+    const mercury=accounts[1];
+    if(mercury.currency==='USD')save('mercurySnapshot.'+profile(),{usd:mercury.balance,date:localDay()});
+    else save('mercurySnapshot.'+profile(),null);
     history[month]=sum(accounts,a=>a.currency==='USD'?a.balance/settings.rate:a.balance);
     save('accounts.'+profile(),accounts);save('history.'+profile(),history);
     setNotice('Saldos guardados para '+labelMonth(month)+'.');view();

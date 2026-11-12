@@ -2,7 +2,7 @@ import {createHash,timingSafeEqual} from 'node:crypto';
 const normalize=s=>String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
 const hash=s=>createHash('sha256').update(s).digest();
 const fields={
-  invoices:{client:['Cliente','Customer','Nombre','Factura'],issued:['Fecha de emisión','Emisión','Fecha factura','Fecha'],amount:['Importe en €','Importe EUR','Importe','Total'],state:['Cobrado','Estado','Status'],year:['Año'],paid:['Fecha de pago','Pago','Fecha de cobro'],due:['Vencimiento','Fecha de vencimiento'],month:['Mes'],batch:['Lote Mercury','Lote']},
+  invoices:{client:['Cliente','Customer','Nombre','Factura'],issued:['Fecha de emisión','Emisión','Fecha factura','Fecha'],amount:['Importe en €','Importe EUR','Importe','Total'],state:['Cobrado','Estado','Status'],year:['Año'],paid:['Fecha de pago','Pago','Fecha de cobro'],due:['Vencimiento','Fecha de vencimiento'],month:['Mes'],batch:['Lote Mercury','Lote'],mercury:['Neto Mercury USD'],mercuryDate:['Fecha abono Mercury']},
   movements:{date:['Fecha','Fecha del movimiento'],amount:['Importe','Importe en €','Cantidad','Total'],category:['Categoría','Categoria','Category'],type:['Tipo','Tipo de movimiento']},
   budgets:{month:['Mes','Fecha'],amount:['Presupuesto','Importe','Límite','Cantidad'],category:['Categoría','Nombre','Category']}
 };
@@ -80,6 +80,7 @@ async function load(kind,mapping,warnings){
       if(page.object!=='page'||page.archived||page.in_trash)continue;
       const get=k=>read(page.properties[names[k]]);
       const amount=get('amount');
+      if(kind==='invoices' && (amount==null || amount===''))continue;
       if(!Number.isFinite(amount)){omitted++;continue}
       const category=get('category');
       const issued=date(get('issued'));
@@ -92,7 +93,7 @@ async function load(kind,mapping,warnings){
         const settled=rawState===true||['cobrada','cobrado','pagada','pagado','paid','settled'].includes(state);
         if((!issued&&!period&&!paid)||amount<0){omitted++;continue}
         if(settled&&!paid)undated++;
-        rows.push({id:page.id,client:String(get('client')||'Sin cliente'),amount,issued,paid,due:date(get('due'))||(rawState===false?paymentDate:null),month:period,batch:String(get('batch')??'').trim(),settled,late:['retrasada','vencida','overdue'].includes(state)});
+        rows.push({id:page.id,client:String(get('client')||'Sin cliente'),amount,issued,paid,mercury:Number.isFinite(get('mercury'))&&get('mercury')>=0?get('mercury'):null,mercuryDate:date(get('mercuryDate')),due:date(get('due'))||(rawState===false?paymentDate:null),month:period,batch:String(get('batch')??'').trim(),settled,late:['retrasada','vencida','overdue'].includes(state)});
       }else if(kind==='movements'){
         const d=date(get('date')),type=normalize(get('type'));
         if(!d||!category){omitted++;continue}

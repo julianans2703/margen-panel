@@ -53,3 +53,10 @@ Ejemplo de `NOTION_MAPPING` en una sola línea:
 - El token solo se usa en la función de Netlify. La clave del panel se guarda en la sesión de la pestaña y se puede borrar en **Ajustes → Desconectar**.
 
 [API de Notion](https://developers.notion.com/reference/query-a-data-source) · [Variables de Netlify Functions](https://docs.netlify.com/build/functions/environment-variables/) · [Frankfurter](https://frankfurter.dev/)
+
+## Saldos, abonos reales y gastos en dólares
+
+- En **Ahorros**, registra el saldo que ves en Mercury y conserva la moneda USD en su tarjeta. Al guardar, **Resumen** muestra esa cifra y su fecha de registro. Actualízala al consultar Mercury.
+- Para mostrar abonos confirmados, añade a **Seguimiento de cobros** dos propiedades opcionales. **Neto Mercury USD** es un número y **Fecha abono Mercury** es una fecha. Copia el importe y la fecha del movimiento de Mercury. Si un envío agrupa varias facturas, registra el importe total del envío en una sola fila del grupo para que el resumen lo cuente una vez.
+- **Trabajo del mes** usa el campo Mes de Notion. **Abonos confirmados en Mercury** usa Fecha abono Mercury. Los importes de Ajustes se siguen usando en los indicadores que dicen estimado y en el simulador.
+- En **Gastos y presupuesto**, al registrar un gasto puedes elegir USD o EUR. Se conserva el importe original. La comparación con el presupuesto en EUR usa el tipo de cambio de Ajustes.

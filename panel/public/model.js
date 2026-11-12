@@ -24,7 +24,7 @@ export function monthly(data, month, settings) {
   const received = sum(paid,i=>quote(i,data.invoices,settings).eur);
   const fees = sum(paid,i=>{const s=quote(i,data.invoices,settings);return (s.conversion+s.transfer)/settings.rate});
   const movements = data.movements.filter(i=>monthOf(i.date)===month);
-  const spent = sum(movements,i=>i.amount);
+  const spent = sum(movements,i=>i.currency==='USD'?i.amount/settings.rate:i.amount);
   return {billed,pending,received,fees,spent,balance:received-spent,paid,issued,movements};
 }
 export function demo(today) {
