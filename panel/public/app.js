@@ -72,7 +72,7 @@ function cashView(){
     const expenses=rows.filter(row=>row.currency==='EUR'&&row.type==='expense'&&row.category===category);
     return '<details class="item"><summary>'+esc(category||'Sin asignar')+' · '+fmt(cents/100,'EUR')+'</summary><p><button type="button" data-cash-spend="'+esc(category)+'">Registrar gasto aquí</button></p>'+table(['Fecha','Concepto','Gastado'],expenses.map(row=>[dateLabel(row.date),esc(row.note)||'—',fmt(row.cents/100,'EUR')]))+'</details>';
   }).join(''));
-  return '<div class="grid two">'+balances+'</div>'+card('Registrar movimiento','<form id="cash"><div class="grid fields"><label class="field">Movimiento<select name="type">'+Object.entries(cashTypes).map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label><label class="field">Importe<input name="amount" type="number" min=".01" step=".01" required></label><label class="field">Fecha<input name="date" type="date" max="'+localDay()+'" value="'+localDay()+'" required></label><label class="field">Categoría<input name="category" maxlength="80" placeholder="Ej. Trabajadores"></label><label class="field">Concepto opcional<input name="note" maxlength="150"></label></div><p class="muted">Registra lo que ya tienes como primera entrada. Usa una categoría para reservar o liberar dinero. Para ingresar en Imagin, usa efectivo sin asignar. Si está reservado, libéralo primero.</p><button class="primary">Guardar movimiento</button></form>')+'<div class="section">'+card('Movimientos del mes',table(['Fecha','Movimiento','Categoría','Concepto','Importe',''],rows.filter(row=>monthOf(row.date)===month).sort((a,b)=>b.date.localeCompare(a.date)).map(row=>[dateLabel(row.date),cashTypes[row.type],esc(row.category)||'—',esc(row.note)||'—',fmt(row.cents/100,row.currency),'<button type="button" data-cash-remove="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
+  return '<div class="grid two">'+balances+'</div>'+card('Registrar movimiento','<form id="cash"><div class="grid fields"><label class="field">Movimiento<select name="type">'+Object.entries(cashTypes).map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label><label class="field">Importe<input name="amount" type="number" min=".01" step=".01" required></label><label class="field">Fecha<input name="date" type="date" max="'+localDay()+'" value="'+localDay()+'" required></label><label class="field">Categoría<input name="category" maxlength="80" placeholder="Ej. Trabajadores"></label><label class="field">Concepto opcional<input name="note" maxlength="150"></label></div><p class="muted">Registra lo que ya tienes como primera entrada. Usa una categoría para reservar o liberar dinero. Para ingresar en Imagin, usa efectivo sin asignar. Si está reservado, libéralo primero.</p><button class="primary">Guardar movimiento</button> <button type="button" id="cancelCashEdit" hidden>Cancelar edición</button></form>')+'<div class="section">'+card('Movimientos del mes',table(['Fecha','Movimiento','Categoría','Concepto','Importe',''],rows.filter(row=>monthOf(row.date)===month).sort((a,b)=>b.date.localeCompare(a.date)).map(row=>[dateLabel(row.date),cashTypes[row.type],esc(row.category)||'—',esc(row.note)||'—',fmt(row.cents/100,row.currency),'<button type="button" data-cash-edit="'+esc(row.id)+'">Editar</button> <button type="button" data-cash-remove="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
 }
 const mercuryDeposits=()=>read('mercuryDeposits.real',[]);
 function deposits(){
@@ -268,7 +268,21 @@ document.addEventListener('click',async event=>{
   if(btn.id==='currency'){currency=currency==='EUR'?'USD':'EUR';save('currency',currency);view()}
   if(btn.id==='theme'){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';save('dark',dark)}
   if(btn.id==='sync')await sync(true);
-  if(btn.dataset.cashSpend!==undefined){const form=$('cash');form.elements.type.value='expense';form.elements.category.value=btn.dataset.cashSpend;form.elements.amount.focus()}
+  if(btn.id==='cancelCashEdit')view();
+  if(btn.dataset.cashEdit){
+    const row=cashRows().find(item=>item.id===btn.dataset.cashEdit);
+    if(!row)return;
+    const form=$('cash');
+    form.dataset.editId=row.id;
+    form.dataset.original=JSON.stringify(row);
+    for(const [field,value] of Object.entries({type:row.type,amount:row.cents/100,date:row.date,category:row.category,note:row.note||''})){
+      form.elements[field].value=value;
+    }
+    form.querySelector('.primary').textContent='Guardar cambios';
+    $('cancelCashEdit').hidden=false;
+    form.elements.amount.focus();
+  }
+  if(btn.dataset.cashSpend!==undefined){if($('cash').dataset.editId)view();const form=$('cash');form.elements.type.value='expense';form.elements.category.value=btn.dataset.cashSpend;form.elements.amount.focus()}
   if(btn.dataset.cashRemove){
     const rows=cashRows().filter(row=>row.id!==btn.dataset.cashRemove);
     if(adjustedBalance(accounts[0],0)-(imaginDeposits()-sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100)<-.005||!validCash(rows)){setNotice('Quita primero los movimientos que usan ese dinero.');return}
@@ -338,14 +352,24 @@ document.addEventListener('submit',async event=>{
     save('history.'+profile(),history);setNotice('Ahorro actualizado.');view();
   }
   if(form.id==='cash'){
-    const type=String(fields.get('type')),currency='EUR',date=String(fields.get('date'));
+    const type=String(fields.get('type')),date=String(fields.get('date'));
     const category=['deposit','imagin'].includes(type)?'':String(fields.get('category')).trim();
     if((type==='allocate'||type==='release')&&!category){setNotice('Indica la categoría.');return}
     const cents=Math.round(Number(fields.get('amount'))*100);
     if(!Number.isSafeInteger(cents)||cents<=0)return;
-    const rows=[...cashRows(),{id:crypto.randomUUID(),type,currency,date,category,cents,note:String(fields.get('note')).trim()}];
+    const existing=cashRows();
+    const original=existing.find(row=>row.id===form.dataset.editId);
+    if(form.dataset.editId&&JSON.stringify(original)!==form.dataset.original){
+      setNotice('Este movimiento cambió en otro navegador. Abre Editar de nuevo.');return;
+    }
+    const movement={id:original?.id??crypto.randomUUID(),type,currency:original?.currency??'EUR',date,category,cents,note:String(fields.get('note')).trim()};
+    const rows=original?existing.map(row=>row.id===original.id?movement:row):[...existing,movement];
+    const nextImagin=sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100;
+    if(nextImagin<imaginDeposits()&&adjustedBalance(accounts[0],0)+nextImagin-imaginDeposits()<-.005){
+      setNotice('El cambio dejaría el ahorro de Imagin en negativo.');return;
+    }
     if(!validCash(rows)){setNotice('Saldo insuficiente en esa categoría o en el efectivo sin asignar para esa fecha.');return}
-    save('cash.'+profile(),rows);month=monthOf(date);setNotice('Movimiento guardado.');view();
+    save('cash.'+profile(),rows);month=monthOf(date);setNotice(original?'Movimiento actualizado.':'Movimiento guardado.');view();
   }
   if(form.id==='mercuryDeposit' &&live){
     const date=String(fields.get('date')), usd=Number(fields.get('usd')), note=String(fields.get('note')).trim();
