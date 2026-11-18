@@ -48,7 +48,7 @@ function overview(s){
   return real+'<div class="grid kpis">'+stats.map(([name,n,p])=>kpi(name,money(n),(n-p>0?'+':'')+money(n-p)+' vs. mes anterior')).join('')+'</div><div class="grid two">'+card('Flujo de caja',chart(months().map(m=>{const r=monthly(withCash(),m,settings);return {m,values:[r.received,r.spent]}}),['Cobrado neto','Gastos']))+card('Próximos cobros',months(shift(monthOf(today),3),3).map(m=>'<div class="row item"><span>'+labelMonth(m)+'</span><strong>'+money(sum(future.filter(i=>monthOf(i.due)===m),i=>quote(i,data.invoices,settings).eur))+'</strong></div>').join('')+'<p><span class="pill '+(late.length?'late':'')+'">'+late.length+' facturas retrasadas</span></p><a href="#facturas">Ver facturas →</a>')+'</div><div class="grid two">'+card('Reserva fiscal estimada','<strong>'+money(s.received*settings.tax/100)+'</strong><p class="muted">'+percent(settings.tax)+' del cobro neto de este mes.</p>')+card('Balance del mes','<strong>'+money(s.balance)+'</strong><p class="muted">Cobro neto estimado menos gastos registrados.</p>')+'</div>';
 }
 const cashRows=()=>read('cash.'+profile(),[]);
-const cashTypes={deposit:'Entrada o retirada del banco',allocate:'Reservar para categoría',release:'Liberar dinero reservado',expense:'Gasto en efectivo',imagin:'Ingresar en Imagin'};
+const cashTypes={deposit:'Añadir efectivo',allocate:'Reservar para categoría',release:'Liberar dinero reservado',expense:'Gasto en efectivo',imagin:'Ingresar en Imagin'};
 const withCash=()=>({...data,movements:[...data.movements,...cashRows().filter(row=>row.type==='expense').map(row=>({...row,amount:row.cents/100,category:row.category||'Efectivo'}))]});
 function cashBalances(rows, unit){
   const buckets=new Map([['',0]]);
@@ -57,22 +57,33 @@ function cashBalances(rows, unit){
     if(type==='allocate'||type==='release'){
       const delta=type==='allocate'?cents:-cents;
       add('',-delta);add(category,delta);
-    }else add(type==='deposit'||type==='imagin'?'':category,type==='deposit'?cents:-cents);
+    }else add(type==='imagin'?'':category||'',type==='deposit'?cents:-cents);
   }
   return buckets;
 }
-function validCash(rows){
+function cashProblem(rows){
   const chronological=[...rows].sort((a,b)=>a.date.localeCompare(b.date));
-  return ['EUR','USD'].every(unit=>chronological.every((row,index)=>[...cashBalances(chronological.slice(0,index+1),unit).values()].every(cents=>cents>=0)));
+  for(const [index,row] of chronological.entries()){
+    const balances=cashBalances(chronological.slice(0,index+1),row.currency);
+    for(const [category,cents] of balances){
+      if(cents<0)return 'El cambio dejaría '+fmt(-cents/100,row.currency)+' de déficit en '+(category||'efectivo sin asignar')+' el '+dateLabel(row.date,{day:'numeric',month:'short',year:'numeric'})+'. Corrige primero el movimiento que usa ese dinero.';
+    }
+  }
+  return '';
+}
+function cashNotice(message){
+  const notice=$('cashNotice');
+  notice.textContent=message;
+  notice.focus();
 }
 function cashView(){
   const rows=cashRows();
   const buckets=[...cashBalances(rows,'EUR')];
   const balances=card('Efectivo en euros','<p><strong>'+fmt(sum(buckets,([,cents])=>cents)/100,'EUR')+'</strong></p>'+buckets.map(([category,cents])=>{
-    const expenses=rows.filter(row=>row.currency==='EUR'&&row.type==='expense'&&row.category===category);
+    const expenses=rows.filter(row=>row.currency==='EUR'&&row.type==='expense'&&(row.category||'')===category);
     return '<details class="item"><summary>'+esc(category||'Sin asignar')+' · '+fmt(cents/100,'EUR')+'</summary><p><button type="button" data-cash-spend="'+esc(category)+'">Registrar gasto aquí</button></p>'+table(['Fecha','Concepto','Gastado'],expenses.map(row=>[dateLabel(row.date),esc(row.note)||'—',fmt(row.cents/100,'EUR')]))+'</details>';
   }).join(''));
-  return '<div class="grid two">'+balances+'</div>'+card('Registrar movimiento','<form id="cash"><div class="grid fields"><label class="field">Movimiento<select name="type">'+Object.entries(cashTypes).map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label><label class="field">Importe<input name="amount" type="number" min=".01" step=".01" required></label><label class="field">Fecha<input name="date" type="date" max="'+localDay()+'" value="'+localDay()+'" required></label><label class="field">Categoría<input name="category" maxlength="80" placeholder="Ej. Trabajadores"></label><label class="field">Concepto opcional<input name="note" maxlength="150"></label></div><p class="muted">Registra lo que ya tienes como primera entrada. Usa una categoría para reservar o liberar dinero. Para ingresar en Imagin, usa efectivo sin asignar. Si está reservado, libéralo primero.</p><button class="primary">Guardar movimiento</button> <button type="button" id="cancelCashEdit" hidden>Cancelar edición</button></form>')+'<div class="section">'+card('Movimientos del mes',table(['Fecha','Movimiento','Categoría','Concepto','Importe',''],rows.filter(row=>monthOf(row.date)===month).sort((a,b)=>b.date.localeCompare(a.date)).map(row=>[dateLabel(row.date),cashTypes[row.type],esc(row.category)||'—',esc(row.note)||'—',fmt(row.cents/100,row.currency),'<button type="button" data-cash-edit="'+esc(row.id)+'">Editar</button> <button type="button" data-cash-remove="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
+  return '<p id="cashNotice" role="alert" tabindex="-1"></p><div class="grid two">'+balances+'</div>'+card('Registrar movimiento','<form id="cash"><div class="grid fields"><label class="field">Movimiento<select name="type">'+Object.entries(cashTypes).map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label><label class="field">Importe<input name="amount" type="number" min=".01" step=".01" required></label><label class="field">Fecha<input name="date" type="date" max="'+localDay()+'" value="'+localDay()+'" required></label><label class="field">Categoría<input name="category" maxlength="80" placeholder="Ej. Trabajadores"></label><label class="field">Concepto opcional<input name="note" maxlength="150"></label></div><p class="muted">Para poner dinero recién retirado en una categoría, elige Añadir efectivo y escribe la categoría. Para repartir efectivo que ya registraste, usa Reservar para categoría. Abre una categoría para registrar sus gastos.</p><button class="primary">Guardar movimiento</button> <button type="button" id="cancelCashEdit" hidden>Cancelar edición</button></form>')+'<div class="section">'+card('Movimientos del mes',table(['Fecha','Movimiento','Categoría','Concepto','Importe',''],rows.filter(row=>monthOf(row.date)===month).sort((a,b)=>b.date.localeCompare(a.date)).map(row=>[dateLabel(row.date),cashTypes[row.type],esc(row.category)||'—',esc(row.note)||'—',fmt(row.cents/100,row.currency),'<button type="button" data-cash-edit="'+esc(row.id)+'">Editar</button> <button type="button" data-cash-remove="'+esc(row.id)+'">Quitar</button>'])))+'</div>';
 }
 const mercuryDeposits=()=>read('mercuryDeposits.real',[]);
 function deposits(){
@@ -285,7 +296,9 @@ document.addEventListener('click',async event=>{
   if(btn.dataset.cashSpend!==undefined){if($('cash').dataset.editId)view();const form=$('cash');form.elements.type.value='expense';form.elements.category.value=btn.dataset.cashSpend;form.elements.amount.focus()}
   if(btn.dataset.cashRemove){
     const rows=cashRows().filter(row=>row.id!==btn.dataset.cashRemove);
-    if(adjustedBalance(accounts[0],0)-(imaginDeposits()-sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100)<-.005||!validCash(rows)){setNotice('Quita primero los movimientos que usan ese dinero.');return}
+    const problem=cashProblem(rows);
+    if(problem){cashNotice(problem);return}
+    if(adjustedBalance(accounts[0],0)-(imaginDeposits()-sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100)<-.005){cashNotice('Quitar este ingreso dejaría el ahorro de Imagin en negativo.');return}
     save('cash.'+profile(),rows);setNotice('Movimiento eliminado.');view();
   }
   if(btn.dataset.depositRemove&&live){save('mercuryDeposits.real',mercuryDeposits().filter(row=>row.id!==btn.dataset.depositRemove));view()}
@@ -353,22 +366,23 @@ document.addEventListener('submit',async event=>{
   }
   if(form.id==='cash'){
     const type=String(fields.get('type')),date=String(fields.get('date'));
-    const category=['deposit','imagin'].includes(type)?'':String(fields.get('category')).trim();
-    if((type==='allocate'||type==='release')&&!category){setNotice('Indica la categoría.');return}
+    const category=type==='imagin'?'':String(fields.get('category')).trim();
+    if((type==='allocate'||type==='release')&&!category){cashNotice('Indica la categoría.');return}
     const cents=Math.round(Number(fields.get('amount'))*100);
     if(!Number.isSafeInteger(cents)||cents<=0)return;
     const existing=cashRows();
     const original=existing.find(row=>row.id===form.dataset.editId);
     if(form.dataset.editId&&JSON.stringify(original)!==form.dataset.original){
-      setNotice('Este movimiento cambió en otro navegador. Abre Editar de nuevo.');return;
+      cashNotice('Este movimiento cambió en otro navegador. Abre Editar de nuevo.');return;
     }
     const movement={id:original?.id??crypto.randomUUID(),type,currency:original?.currency??'EUR',date,category,cents,note:String(fields.get('note')).trim()};
     const rows=original?existing.map(row=>row.id===original.id?movement:row):[...existing,movement];
     const nextImagin=sum(rows.filter(row=>row.type==='imagin'),row=>row.cents)/100;
     if(nextImagin<imaginDeposits()&&adjustedBalance(accounts[0],0)+nextImagin-imaginDeposits()<-.005){
-      setNotice('El cambio dejaría el ahorro de Imagin en negativo.');return;
+      cashNotice('El cambio dejaría el ahorro de Imagin en negativo.');return;
     }
-    if(!validCash(rows)){setNotice('Saldo insuficiente en esa categoría o en el efectivo sin asignar para esa fecha.');return}
+    const problem=cashProblem(rows);
+    if(problem){cashNotice(problem);return}
     save('cash.'+profile(),rows);month=monthOf(date);setNotice(original?'Movimiento actualizado.':'Movimiento guardado.');view();
   }
   if(form.id==='mercuryDeposit' &&live){
